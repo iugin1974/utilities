@@ -11,12 +11,20 @@
 #include "ftp.h"
 using namespace std;
 
+bool ftp::initialized = false;
+
 void ftp::init() {
-    curl_global_init(CURL_GLOBAL_ALL);
+    if (!initialized) {
+        curl_global_init(CURL_GLOBAL_ALL);
+        initialized = true;
+    }
 }
 
 void ftp::close() {
-    curl_global_cleanup();
+    if (initialized) {
+        curl_global_cleanup();
+        initialized = false;
+    }
 }
 
 size_t ftp::read_callback(char *ptr, size_t size, size_t nmemb, FILE *stream)
@@ -93,6 +101,7 @@ void ftp::configureProtocol(void* curlHandle) const {
 }
 
 int ftp::uploadFile(const std::string& f) {
+    init(); // idempotente: non fa nulla se già inizializzato
 
     CURL *curl;
     CURLcode res;
@@ -147,6 +156,8 @@ int ftp::downloadFile(const std::string& local_file) {
 }
 
 int ftp::downloadFile(const std::string& ftp_file, const std::string& local_file) {
+    init(); // idempotente: non fa nulla se già inizializzato
+
     CURL *curl;
     CURLcode res = CURLE_FAILED_INIT;
     struct FtpFile ftpfile = {

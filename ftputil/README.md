@@ -1,87 +1,103 @@
-# configutil
+# ftputil
 
-Modulo riutilizzabile per leggere un file di configurazione utente
-`~/.<nomeprogramma>rc` e per chiedere password da terminale senza eco.
+Modulo riutilizzabile per upload/download di file via FTP, FTPS
+(esplicito e implicito) e SFTP, basato su libcurl.
 
-Nato per essere copiato/linkato identico in ogni nuovo progetto, così
-la convenzione ".xxxrc" non va reinventata né ristudiata ogni volta.
+Nato per essere copiato/linkato identico in ogni nuovo progetto che
+deve trasferire file da/verso un server remoto.
+
+## Dipendenze
+
+- libcurl con development headers (`libcurl4-openssl-dev` su Debian/Ubuntu)
+- Per SFTP: libcurl deve essere compilata con supporto libssh2/libssh.
+  Verifica con:
+  ```bash
+  curl -V | grep -i sftp
+  ```
+  Se `sftp` non compare tra i protocolli, installa `libssh2-dev` e
+  ricompila libcurl, oppure usa una distribuzione che la fornisce già
+  abilitata (es. Ubuntu/Debian standard).
 
 ## Integrazione in un nuovo progetto
 
-1. Copia (o aggiungi come submodule) la cartella `configutil/` dentro il
-   tuo progetto, es. in `libs/configutil`.
+1. Copia (o aggiungi come submodule) la cartella `ftputil/` dentro il
+   tuo progetto, es. in `libs/ftputil`.
 2. Nel tuo `CMakeLists.txt` principale:
 
    ```cmake
-   add_subdirectory(libs/configutil)
-   target_link_libraries(mio_programma PRIVATE configutil)
+   add_subdirectory(libs/ftputil)
+   target_link_libraries(mio_programma PRIVATE ftputil)
    ```
 
-## Convenzione del file `.xxxrc`
-
-- Percorso: `~/.<nome_programma>rc` (es. per un programma "pm" ->
-  `~/.pmrc`). Il nome è quello passato a `AppConfig::init(...)`, non il
-  nome dell'eseguibile: puoi quindi rinominare il binario senza rompere
-  la config esistente degli utenti.
-- Formato: una coppia `chiave=valore` per riga.
-- Righe vuote o che iniziano con `#` sono ignorate (commenti).
-- Spazi intorno a chiave e valore vengono rimossi automaticamente.
-
-Esempio di `~/.pmrc`:
-
-```
-# Configurazione FTP per pm
-user_ftp=mario
-host_ftp=ftp.example.com/remote/dir/
-# pass_ftp volutamente omessa: verrà chiesta a terminale ad ogni avvio
-```
-
-## Uso in `main()`
+## Uso base (FTP semplice)
 
 ```cpp
-#include "appconfig.h"
+#include "ftp.h"
 
-int main() {
-    AppConfig::init("pm"); // legge ~/.pmrc
+ftp::init(); // una sola volta, a inizio programma
 
-    std::string user, host, pwd;
+ftp client;
+client.setHost("example.com/remote/dir/");
+client.setUserName("utente");
+client.setPassword("password");
 
-    if (!AppConfig::read("user_ftp", &user)) {
-        std::cerr << "Manca 'user_ftp' in " << AppConfig::configFilePath() << "\n";
-        exit(1);
-    }
-    if (!AppConfig::read("host_ftp", &host)) {
-        std::cerr << "Manca 'host_ftp' in " << AppConfig::configFilePath() << "\n";
-        exit(1);
-    }
-    if (!AppConfig::read("pass_ftp", &pwd)) {
-        pwd = AppConfig::getpass("FTP-Password", true); // niente eco a schermo
-    }
-}
+client.uploadFile("/percorso/locale/file.txt");
+client.downloadFile("file.txt", "/percorso/locale/copia.txt");
+
+ftp::close(); // una sola volta, a fine programma
 ```
+
+## Protocolli supportati
+
+Impostabili con `setProtocol(Protocol p)`:
+
+| Valore | Significato |
+|---|---|
+| `Protocol::FTP` | FTP in chiaro, nessuna cifratura (default) |
+| `Protocol::FTPS_EXPLICIT` | `ftp://` + AUTH TLS, porta 21 |
+| `Protocol::FTPS_IMPLICIT` | `ftps://` diretto, tipicamente porta 990 |
+| `Protocol::SFTP` | SSH, tipicamente porta 22 |
+
+Lo schema dell'URL (`ftp://`/`ftps://`/`sftp://`) viene applicato
+automaticamente in base al protocollo scelto: puoi passare a
+`setHost()` l'host con o senza schema, non fa differenza.
+
+### FTPS
+
+```cpp
+client.setProtocol(Protocol::FTPS_EXPLICIT);
+client.setVerifySsl(true, true); // verifica certificato, consigliato in produzione
+```
+
+Disattivare la verifica (`setVerifySsl(false, false)`) va bene solo
+per test locali con certificati self-signed, **mai in produzione**.
+
+### SFTP
+
+```cpp
+client.setProtocol(Protocol::SFTP);
+client.setSshKnownHostsFile("/home/utente/.ssh/known_hosts"); // consigliato
+
+// autenticazione a password (default, usa setUserName/setPassword)
+// oppure a chiave:
+client.setSshPrivateKey("/home/utente/.ssh/id_rsa", "/home/utente/.ssh/id_rsa.pub");
+```
+
+`setSshKnownHostsFile` valida la chiave pubblica del server contro un
+file `known_hosts`: senza, la connessione SFTP è vulnerabile ad
+attacchi man-in-the-middle.
 
 ## Sicurezza — checklist da rifare per ogni nuovo progetto
 
-- **Permessi del file**: consiglia (o forza) `chmod 600 ~/.pmrc`, così
-  solo il proprietario può leggere le eventuali password in chiaro.
-  `configutil` non lo impone automaticamente: se vuoi, aggiungi un
-  controllo con `stat()` in `AppConfig::read` che avvisi se i permessi
-  sono troppo permissivi.
-- **Non committare mai un file `.xxxrc` reale** nel repository. Se tieni
-  un file di esempio, chiamalo `.pmrc.example` e aggiungi `.pmrc`
-  al `.gitignore` del progetto.
-- **Preferisci `getpass()` a una entry nel file** quando possibile: una
-  password richiesta a runtime non finisce mai su disco.
+- Usa `FTP` in chiaro solo su reti fidate/interne. Su internet
+  preferisci sempre `FTPS_EXPLICIT`/`FTPS_IMPLICIT` o `SFTP`.
+- Non disattivare `setVerifySsl` in produzione.
+- Per SFTP, imposta sempre `setSshKnownHostsFile`.
+- Le credenziali (utente/password) tipicamente arrivano da
+  [`configutil`](../configutil/README.md), non vanno mai hardcodate
+  nel sorgente.
 
-## Estendere il modulo
+## Esempio completo
 
-Se in futuro ti serve, ad esempio, un path di configurazione passato
-da riga di comando (`--config /path/personalizzato`), usa il secondo
-parametro di `init()`:
-
-```cpp
-AppConfig::init("pm", cliConfigPathOrEmpty);
-```
-
-Se `explicitPath` non è vuoto, ha sempre la precedenza su
-`~/.<nome>rc`.
+Vedi [`example/main.cpp`](example/main.cpp) per tutti e quattro i casi
+(FTP, FTPS esplicito, SFTP a password, SFTP a chiave).

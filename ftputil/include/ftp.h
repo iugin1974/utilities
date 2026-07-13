@@ -20,9 +20,16 @@ enum class Protocol {
 
 class ftp {
 public:
-    // Da chiamare una sola volta all'avvio del programma (wrapper di curl_global_init)
+    // init() è idempotente: chiamarla quando è già inizializzata non fa
+    // nulla. Viene chiamata automaticamente dalla classe stessa prima di
+    // ogni operazione (uploadFile/downloadFile), quindi normalmente NON
+    // devi chiamarla tu a mano.
     static void init();
-    // Da chiamare una sola volta alla chiusura del programma (wrapper di curl_global_cleanup)
+
+    // close() chiude curl SOLO se init() era stata effettivamente eseguita
+    // (flag interno); chiamarla senza aver mai inizializzato, o più volte
+    // di fila, è innocuo. Da chiamare una volta, quando il programma non
+    // farà più operazioni FTP (tipicamente a fine main()).
     static void close();
 
     void setHost(std::string ftp_host);
@@ -81,6 +88,9 @@ private:
 
     static size_t read_callback(char *ptr, size_t size, size_t nmemb, FILE *stream);
     static size_t my_fwrite(void *buffer, size_t size, size_t nmemb, void *stream);
+
+    // true se curl_global_init è stata effettivamente eseguita e non ancora chiusa.
+    static bool initialized;
 };
 
 #endif // FTPUTIL_FTP_H
